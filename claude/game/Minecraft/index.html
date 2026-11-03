@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Blockcraft — shared voxel world</title>
+<style>
+  :root{
+    --sky-top:#4d8fe0;
+    --sky-bot:#bfe3ff;
+    --panel:#1b1f2a;
+    --panel-line:#33394a;
+    --accent:#e0a03c;
+    --text:#eef1f6;
+    --text-dim:#9aa3b5;
+  }
+  html,body{margin:0;padding:0;overflow:hidden;height:100%;background:#000;
+    font-family:'Courier New',ui-monospace,Consolas,monospace;color:var(--text);}
+  #canvas-wrap{position:fixed;inset:0;}
+  canvas{display:block;width:100%;height:100%;}
+
+  #crosshair{
+    position:fixed;top:50%;left:50%;width:18px;height:18px;
+    transform:translate(-50%,-50%);pointer-events:none;z-index:20;
+  }
+  #crosshair::before,#crosshair::after{
+    content:"";position:absolute;background:rgba(255,255,255,.85);
+    box-shadow:0 0 1px rgba(0,0,0,.6);
+  }
+  #crosshair::before{left:50%;top:0;width:2px;height:100%;margin-left:-1px;}
+  #crosshair::after{top:50%;left:0;height:2px;width:100%;margin-top:-1px;}
+
+  #hud{position:fixed;top:14px;left:14px;z-index:20;display:flex;flex-direction:column;gap:8px;pointer-events:none;}
+  .panel{
+    background:rgba(20,23,32,.72);border:1px solid var(--panel-line);
+    border-radius:3px;padding:8px 12px;font-size:12px;line-height:1.6;
+    color:var(--text-dim);backdrop-filter:blur(2px);
+  }
+  .panel b{color:var(--text);}
+  #playerlist{position:fixed;top:14px;right:14px;z-index:20;min-width:150px;}
+  #playerlist .row{display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;color:var(--text);}
+  #playerlist .dot{width:9px;height:9px;border-radius:2px;flex:none;}
+  #playerlist .title{color:var(--text-dim);font-size:11px;letter-spacing:.03em;margin-bottom:4px;}
+
+  #hotbar{
+    position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
+    display:flex;gap:6px;z-index:20;
+  }
+  .slot{
+    width:46px;height:46px;border:2px solid var(--panel-line);border-radius:4px;
+    background:rgba(20,23,32,.72);display:flex;align-items:center;justify-content:center;
+    cursor:pointer;
+  }
+  .slot .swatch{width:26px;height:26px;border-radius:2px;border:1px solid rgba(0,0,0,.35);}
+  .slot.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);}
+  .slot .key{position:absolute;font-size:9px;color:var(--text-dim);transform:translate(-19px,-19px);}
+
+  #menu{
+    position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(180deg,var(--sky-top),var(--sky-bot));
+  }
+  #menu-card{
+    background:var(--panel);border:1px solid var(--panel-line);border-radius:6px;
+    padding:32px 36px;width:340px;text-align:center;
+  }
+  #menu-card h1{margin:0 0 4px;font-size:22px;letter-spacing:.02em;color:var(--text);}
+  #menu-card p.sub{margin:0 0 22px;color:var(--text-dim);font-size:12.5px;line-height:1.5;}
+  #menu-card input{
+    width:100%;box-sizing:border-box;padding:10px 12px;border-radius:4px;
+    border:1px solid var(--panel-line);background:#11141c;color:var(--text);
+    font-family:inherit;font-size:14px;margin-bottom:14px;
+  }
+  #menu-card input:focus{outline:none;border-color:var(--accent);}
+  #menu-card button{
+    width:100%;padding:11px;border-radius:4px;border:none;background:var(--accent);
+    color:#241705;font-weight:bold;font-family:inherit;font-size:14px;cursor:pointer;
+  }
+  #menu-card button:hover{filter:brightness(1.08);}
+  #menu-card .hint{margin-top:16px;font-size:11px;color:var(--text-dim);text-align:left;line-height:1.6;}
+  #menu-card .hint b{color:var(--text);}
+
+  #unlock-overlay{
+    position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;
+    background:rgba(10,12,18,.55);cursor:pointer;
+  }
+  #unlock-overlay .box{
+    background:var(--panel);border:1px solid var(--panel-line);border-radius:6px;
+    padding:20px 28px;text-align:center;color:var(--text);font-size:13px;
+  }
+  #status{position:fixed;bottom:14px;right:14px;z-index:20;font-size:11px;color:var(--text-dim);}
+</style>
+</head>
+<body>
+
+<div id="menu">
+  <div id="menu-card">
+    <h1>Blockcraft</h1>
+    <p class="sub">A shared voxel world. Anyone with this artifact open sees your builds and your player marker.</p>
+    <input id="name-input" maxlength="16" placeholder="Your player name" autocomplete="off">
+    <button id="join-btn">Enter world</button>
+    <div class="hint">
+      <div><b>WASD</b> move · <b>Space</b> jump · <b>Mouse</b> look</div>
+      <div><b>Left click</b> break block · <b>Right click</b> place block</div>
+      <div><b>1–6</b> select block type</div>
+    </div>
+  </div>
+</div>
+
+<div id="canvas-wrap"><canvas id="c"></canvas></div>
+<div id="crosshair" style="display:none;"></div>
+
+<div id="hud" style="display:none;">
+  <div class="panel"><b>Blockcraft</b> — shared world<br>WASD move · Space jump · L-click break · R-click place</div>
+</div>
+
+<div id="playerlist" style="display:none;">
+  <div class="panel">
+    <div class="title">PLAYERS ONLINE</div>
+    <div id="playerlist-rows"></div>
+  </div>
+</div>
+
+<div id="hotbar" style="display:none;"></div>
+
+<div id="unlock-overlay">
+  <div class="box">Click to look around<br><span style="color:var(--text-dim);font-size:11px;">Esc to release the mouse</span></div>
+</div>
+
+<div id="status" style="display:none;"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js"></script>
+<script>
+// Storage fallback: inside Claude's artifact runtime window.storage already exists.
+// Anywhere else (GitHub Pages, local file) we sync through a public MQTT relay instead.
+(function(){
+  if(window.storage) return;
+  const room = (new URLSearchParams(location.search).get('room') || 'main')
+    .replace(/[^\w-]/g,'').slice(0,32) || 'main';
+  const base = 'blockcraft-gh/' + room + '/';
+  const cache = {};
+  let client = null;
+  try{
+    client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {clean:true, reconnectPeriod:3000});
+    client.on('connect', ()=> client.subscribe(base + '#'));
+    client.on('message', (topic, payload)=>{
+      const key = topic.slice(base.length);
+      const s = payload.toString();
+      if(s === '') delete cache[key]; else cache[key] = s;
+    });
+  }catch(e){ console.error('relay connect failed', e); }
+  window.storage = {
+    async set(key, value){
+      cache[key] = value;
+      // only the world is retained by the relay; presence is live-only so ghosts expire
+      if(client && client.connected) client.publish(base + key, value, {retain: key.startsWith('world:')});
+      return {key, value};
+    },
+    async get(key){
+      if(key in cache) return {key, value: cache[key]};
+      throw new Error('not found');
+    },
+    async list(prefix){
+      return {keys: Object.keys(cache).filter(k => k.startsWith(prefix))};
+    }
+  };
+})();
+</script>
+
+<script>
+(function(){
+
+// ---------- Config ----------
+const WORLD_SIZE = 24;          // half-extent isn't used; world spans 0..WORLD_SIZE-1 on x/z
+const WORLD_HEIGHT = 12;
+const BLOCK_TYPES = [
+  {name:"Grass", color: 0x5fae3a},
+  {name:"Dirt",  color: 0x8a5a34},
+  {name:"Stone", color: 0x8a8f96},
+  {name:"Wood",  color: 0x9c6b3f},
+  {name:"Sand",  color: 0xdbc477},
+  {name:"Brick", color: 0xb1503a},
+];
+const SYNC_INTERVAL = 1400; // ms, how often we push/pull shared state
+const PLAYER_COLORS = [0xe0524c,0x4ca3e0,0xe0c94c,0x7ce04c,0xc44ce0,0xe0824c,0x4ce0c9,0xe04ca0];
+
+let scene, camera, renderer, clock;
+let world = {}; // "x,y,z" -> colorIndex
+let blockMeshes = {}; // key -> mesh
+let playerName = "";
+let playerColor = 0xffffff;
+let myId = "p_" + Math.random().toString(36).slice(2,10);
+let otherPlayers = {}; // id -> {mesh, label, data}
+let selectedSlot = 0;
+let keys = {};
+let velocity = new THREE.Vector3();
+let onGround = false;
+let pitch=0, yaw=0;
+let pointerLocked = false;
+
+const raycaster = new THREE.Raycaster();
+
+// ---------- Terrain height (deterministic pseudo-noise) ----------
+function heightAt(x,z){
+  const h = Math.sin(x*0.35)*1.4 + Math.cos(z*0.32)*1.4 + Math.sin((x+z)*0.15)*1.2;
+  return Math.max(1, Math.round(3 + h));
+}
+
+function keyOf(x,y,z){ return x+","+y+","+z; }
+
+// ---------- Init world data (base terrain) ----------
+function generateBaseTerrain(){
+  const data = {};
+  for(let x=0;x<WORLD_SIZE;x++){
+    for(let z=0;z<WORLD_SIZE;z++){
+      const h = heightAt(x,z);
+      for(let y=0;y<h;y++){
+        let colorIdx = 0; // grass on top
+        if(y === h-1) colorIdx = 0;
+        else if(y >= h-3) colorIdx = 1;
+        else colorIdx = 2;
+        data[keyOf(x,y,z)] = colorIdx;
+      }
+    }
+  }
+  return data;
+}
+
+// ---------- Three.js setup ----------
+function initScene(){
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x8fc7ef);
+  scene.fog = new THREE.Fog(0x8fc7ef, 30, 90);
+
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.05, 200);
+
+  renderer = new THREE.WebGLRenderer({canvas: document.getElementById('c'), antialias:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = false;
+
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x445544, 0.9);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(20,40,10);
+  scene.add(sun);
+
+  window.addEventListener('resize', onResize);
+  clock = new THREE.Clock();
+}
+
+function onResize(){
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// shared box geometry
+const boxGeo = new THREE.BoxGeometry(1,1,1);
+const materials = BLOCK_TYPES.map(t=> new THREE.MeshLambertMaterial({color:t.color}));
+
+function addBlockMesh(x,y,z,colorIdx){
+  const k = keyOf(x,y,z);
+  if(blockMeshes[k]) return;
+  const mesh = new THREE.Mesh(boxGeo, materials[colorIdx] || materials[0]);
+  mesh.position.set(x+0.5, y+0.5, z+0.5);
+  mesh.userData = {x,y,z};
+  scene.add(mesh);
+  blockMeshes[k] = mesh;
+}
+
+function removeBlockMesh(x,y,z){
+  const k = keyOf(x,y,z);
+  const m = blockMeshes[k];
+  if(m){ scene.remove(m); delete blockMeshes[k]; }
+}
+
+function rebuildAllMeshes(){
+  Object.keys(blockMeshes).forEach(k=>{ scene.remove(blockMeshes[k]); });
+  blockMeshes = {};
+  Object.keys(world).forEach(k=>{
+    const [x,y,z] = k.split(",").map(Number);
+    addBlockMesh(x,y,z, world[k]);
+  });
+}
+
+function solidAt(x,y,z){
+  return world[keyOf(x,y,z)] !== undefined; // note: grass is type 0, so don't use truthiness
+}
+
+// ---------- Player (first person) ----------
+const player = {
+  pos: new THREE.Vector3(WORLD_SIZE/2, WORLD_HEIGHT, WORLD_SIZE/2),
+  height: 1.7,
+  radius: 0.32,
+};
+
+function spawnPlayer(){
+  const cx = Math.floor(WORLD_SIZE/2);
+  const cz = Math.floor(WORLD_SIZE/2);
+  const h = heightAt(cx,cz);
+  player.pos.set(cx+0.5, h+2, cz+0.5);
+}
+
+function updateCameraFromPlayer(){
+  camera.position.set(player.pos.x, player.pos.y + player.height, player.pos.z);
+  camera.rotation.order = "YXZ";
+  camera.rotation.y = yaw;
+  camera.rotation.x = pitch;
+}
+
+// World edge: keep the player from ever walking off the generated terrain
+const EDGE_MARGIN = 0.55;
+const MIN_COORD = EDGE_MARGIN;
+const MAX_COORD = WORLD_SIZE - EDGE_MARGIN;
+
+// Bedrock safety net: if a fall ever gets past collision checks (fast dt, etc.)
+// this guarantees the player can never drop into the void.
+const BEDROCK_Y = -1;
+
+// simple AABB-ish collision against voxel grid
+function tryMove(dx,dy,dz){
+  const r = player.radius;
+  // X
+  if(dx !== 0){
+    const nx = clampCoord(player.pos.x + dx);
+    if(!collidesBox(nx, player.pos.y, player.pos.z, r)) player.pos.x = nx;
+  }
+  // Z
+  if(dz !== 0){
+    const nz = clampCoord(player.pos.z + dz);
+    if(!collidesBox(player.pos.x, player.pos.y, nz, r)) player.pos.z = nz;
+  }
+  // Y
+  if(dy !== 0){
+    const ny = player.pos.y + dy;
+    if(ny <= BEDROCK_Y){
+      // hard floor under the whole world; never let the player fall past it
+      player.pos.y = BEDROCK_Y;
+      velocity.y = 0;
+      onGround = true;
+      return;
+    }
+    if(!collidesBox(player.pos.x, ny, player.pos.z, r)){
+      player.pos.y = ny;
+      onGround = false;
+    } else {
+      if(dy < 0) onGround = true;
+      velocity.y = 0;
+    }
+  }
+}
+
+function clampCoord(v){
+  return Math.max(MIN_COORD, Math.min(MAX_COORD, v));
+}
+
+function collidesBox(px,py,pz,r){
+  const minX = Math.floor(px-r), maxX = Math.floor(px+r);
+  const minZ = Math.floor(pz-r), maxZ = Math.floor(pz+r);
+  // Check every voxel layer the player's body actually spans (feet to head),
+  // not just a single sliver — this is what let people clip through geometry.
+  const minY = Math.floor(py + 0.02);
+  const maxY = Math.floor(py + player.height - 0.02);
+  for(let x=minX;x<=maxX;x++)
+    for(let z=minZ;z<=maxZ;z++)
+      for(let y=minY;y<=maxY;y++){
+        if(solidAt(x,y,z)) return true;
+      }
+  return false;
+}
+
+function groundCheck(){
+  if(player.pos.y <= BEDROCK_Y + 0.001) return true;
+  const r = player.radius;
+  const minX = Math.floor(player.pos.x-r), maxX = Math.floor(player.pos.x+r);
+  const minZ = Math.floor(player.pos.z-r), maxZ = Math.floor(player.pos.z+r);
+  const gy = Math.floor(player.pos.y - 0.05);
+  for(let x=minX;x<=maxX;x++)
+    for(let z=minZ;z<=maxZ;z++)
+      if(solidAt(x,gy,z)) return true;
+  return false;
+}
+
+// ---------- Input ----------
+function setupInput(){
+  window.addEventListener('keydown', e=>{
+    keys[e.code] = true;
+    const n = parseInt(e.key);
+    if(n>=1 && n<=6){ selectSlot(n-1); }
+  });
+  window.addEventListener('keyup', e=>{ keys[e.code]=false; });
+
+  const canvas = document.getElementById('c');
+  canvas.addEventListener('click', ()=>{
+    if(!pointerLocked) canvas.requestPointerLock();
+  });
+  document.addEventListener('pointerlockchange', ()=>{
+    pointerLocked = document.pointerLockElement === canvas;
+    document.getElementById('unlock-overlay').style.display = pointerLocked ? 'none':'flex';
+  });
+  document.getElementById('unlock-overlay').addEventListener('click', ()=>{
+    canvas.requestPointerLock();
+  });
+
+  document.addEventListener('mousemove', e=>{
+    if(!pointerLocked) return;
+    yaw -= e.movementX * 0.0022;
+    pitch -= e.movementY * 0.0022;
+    pitch = Math.max(-Math.PI/2+0.05, Math.min(Math.PI/2-0.05, pitch));
+  });
+
+  canvas.addEventListener('mousedown', e=>{
+    if(!pointerLocked) return;
+    if(e.button === 0) breakBlock();
+    if(e.button === 2) placeBlock();
+  });
+  canvas.addEventListener('contextmenu', e=> e.preventDefault());
+}
+
+function selectSlot(i){
+  selectedSlot = i;
+  document.querySelectorAll('.slot').forEach((el,idx)=>{
+    el.classList.toggle('active', idx===i);
+  });
+}
+
+// ---------- Raycast targeting ----------
+function getTargetedBlock(){
+  raycaster.setFromCamera({x:0,y:0}, camera);
+  const meshes = Object.values(blockMeshes);
+  const hits = raycaster.intersectObjects(meshes);
+  if(hits.length === 0) return null;
+  const hit = hits[0];
+  if(hit.distance > 7) return null;
+  return hit;
+}
+
+function breakBlock(){
+  const hit = getTargetedBlock();
+  if(!hit) return;
+  const {x,y,z} = hit.object.userData;
+  const k = keyOf(x,y,z);
+  delete world[k];
+  removeBlockMesh(x,y,z);
+  scheduleSync();
+}
+
+function placeBlock(){
+  const hit = getTargetedBlock();
+  if(!hit) return;
+  const n = hit.face.normal;
+  const {x,y,z} = hit.object.userData;
+  const nx = x + n.x, ny = y + n.y, nz = z + n.z;
+  if(nx<0||nz<0||nx>=WORLD_SIZE||nz>=WORLD_SIZE||ny<0||ny>=WORLD_HEIGHT+6) return;
+  // don't place inside player
+  const dist = Math.hypot(player.pos.x-(nx+0.5), player.pos.z-(nz+0.5));
+  if(dist < 0.6 && ny >= Math.floor(player.pos.y)-1 && ny <= Math.floor(player.pos.y)+2) return;
+  const k = keyOf(nx,ny,nz);
+  if(world[k] !== undefined) return;
+  world[k] = selectedSlot;
+  addBlockMesh(nx,ny,nz, selectedSlot);
+  scheduleSync();
+}
+
+// ---------- Movement update ----------
+function updateMovement(dt){
+  const speed = 4.3;
+  const dir = new THREE.Vector3();
+  const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+  const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+
+  if(keys['KeyW']) dir.add(forward);
+  if(keys['KeyS']) dir.sub(forward);
+  if(keys['KeyD']) dir.add(right);
+  if(keys['KeyA']) dir.sub(right);
+
+  if(dir.lengthSq() > 0){
+    dir.normalize().multiplyScalar(speed*dt);
+    tryMove(dir.x, 0, dir.z);
+  }
+
+  // gravity
+  velocity.y -= 18*dt;
+  if(velocity.y < -25) velocity.y = -25;
+
+  onGround = groundCheck();
+  if(onGround && velocity.y < 0) velocity.y = 0;
+
+  if(keys['Space'] && onGround){
+    velocity.y = 6.2;
+    onGround = false;
+  }
+
+  tryMove(0, velocity.y*dt, 0);
+}
+
+// ---------- Other players rendering ----------
+function ensureOtherPlayerMesh(id, colorHex){
+  if(otherPlayers[id]) return otherPlayers[id];
+  const geo = new THREE.CapsuleGeometry ? null : null;
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5,1.5,0.5),
+    new THREE.MeshLambertMaterial({color: colorHex})
+  );
+  body.position.y = 0.75;
+  group.add(body);
+  const head = new THREE.Mesh(
+    new THREE.BoxGeometry(0.4,0.4,0.4),
+    new THREE.MeshLambertMaterial({color: 0xf1c27d})
+  );
+  head.position.y = 1.7;
+  group.add(head);
+  scene.add(group);
+  otherPlayers[id] = {group, lastSeen: Date.now()};
+  return otherPlayers[id];
+}
+
+function removeOtherPlayer(id){
+  const o = otherPlayers[id];
+  if(o){ scene.remove(o.group); delete otherPlayers[id]; }
+}
+
+function updatePlayerListUI(){
+  const rows = document.getElementById('playerlist-rows');
+  rows.innerHTML = "";
+  const mine = document.createElement('div');
+  mine.className = 'row';
+  mine.innerHTML = `<div class="dot" style="background:#${playerColor.toString(16).padStart(6,'0')}"></div>${escapeHtml(playerName)} (you)`;
+  rows.appendChild(mine);
+  Object.keys(otherPlayers).forEach(id=>{
+    const o = otherPlayers[id];
+    if(!o.data) return;
+    const row = document.createElement('div');
+    row.className = 'row';
+    const c = (o.data.color||0xffffff).toString(16).padStart(6,'0');
+    row.innerHTML = `<div class="dot" style="background:#${c}"></div>${escapeHtml(o.data.name||'player')}`;
+    rows.appendChild(row);
+  });
+}
+
+function escapeHtml(s){
+  return (s||"").replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---------- Storage sync ----------
+let lastPushedBlockCount = 0;
+let syncTimer = null;
+let statusEl;
+
+function scheduleSync(){
+  // push block diff soon (debounced by regular interval too)
+  pushWorld();
+}
+
+async function pushWorld(){
+  try{
+    await window.storage.set('world:blocks', JSON.stringify(world), true);
+  }catch(e){ console.error('push world failed', e); }
+}
+
+async function pushMyPresence(){
+  try{
+    const data = {
+      name: playerName, color: playerColor,
+      x: player.pos.x, y: player.pos.y, z: player.pos.z, yaw: yaw,
+      t: Date.now()
+    };
+    await window.storage.set('player:'+myId, JSON.stringify(data), true);
+  }catch(e){ console.error('push presence failed', e); }
+}
+
+async function pullWorld(){
+  try{
+    const res = await window.storage.get('world:blocks', true);
+    if(res && res.value){
+      const remote = JSON.parse(res.value);
+      // merge: remote is source of truth for keys we don't have locally changed recently;
+      // simplest: if remote differs, rebuild
+      const remoteKeys = Object.keys(remote);
+      const localKeys = Object.keys(world);
+      if(remoteKeys.length !== localKeys.length || remoteKeys.some(k=> world[k] !== remote[k])){
+        world = remote;
+        rebuildAllMeshes();
+      }
+    }
+  }catch(e){ /* key may not exist yet */ }
+}
+
+async function pullPlayers(){
+  try{
+    const listRes = await window.storage.list('player:', true);
+    if(!listRes || !listRes.keys) return;
+    const seen = new Set();
+    for(const k of listRes.keys){
+      const id = k.slice('player:'.length);
+      if(id === myId) continue;
+      try{
+        const r = await window.storage.get(k, true);
+        if(!r || !r.value) continue;
+        const data = JSON.parse(r.value);
+        if(Date.now() - data.t > 20000) continue; // stale, treat as offline
+        seen.add(id);
+        const o = ensureOtherPlayerMesh(id, data.color || 0xffffff);
+        o.data = data;
+        o.lastSeen = Date.now();
+        o.group.position.set(data.x, data.y, data.z);
+        o.group.rotation.y = data.yaw || 0;
+      }catch(e){}
+    }
+    Object.keys(otherPlayers).forEach(id=>{
+      if(!seen.has(id) && Date.now()-otherPlayers[id].lastSeen > 20000){
+        removeOtherPlayer(id);
+      }
+    });
+    updatePlayerListUI();
+  }catch(e){ /* ignore */ }
+}
+
+function startSyncLoop(){
+  syncTimer = setInterval(()=>{
+    pushMyPresence();
+    pullWorld();
+    pullPlayers();
+  }, SYNC_INTERVAL);
+  pushMyPresence();
+  pullWorld();
+  pullPlayers();
+}
+
+// ---------- Hotbar UI ----------
+function buildHotbar(){
+  const bar = document.getElementById('hotbar');
+  bar.innerHTML = "";
+  BLOCK_TYPES.forEach((t,i)=>{
+    const slot = document.createElement('div');
+    slot.className = 'slot' + (i===0?' active':'');
+    slot.title = t.name + " (" + (i+1) + ")";
+    slot.innerHTML = `<div class="swatch" style="background:#${t.color.toString(16).padStart(6,'0')}"></div>`;
+    slot.addEventListener('click', ()=> selectSlot(i));
+    bar.appendChild(slot);
+  });
+}
+
+// ---------- Main loop ----------
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  updateMovement(dt);
+  updateCameraFromPlayer();
+  renderer.render(scene, camera);
+}
+
+// ---------- Boot ----------
+function boot(name){
+  playerName = name;
+  playerColor = PLAYER_COLORS[Math.floor(Math.random()*PLAYER_COLORS.length)];
+
+  document.getElementById('menu').style.display = 'none';
+  document.getElementById('crosshair').style.display = 'block';
+  document.getElementById('hud').style.display = 'flex';
+  document.getElementById('playerlist').style.display = 'block';
+  document.getElementById('hotbar').style.display = 'flex';
+  document.getElementById('status').style.display = 'block';
+  statusEl = document.getElementById('status');
+  statusEl.textContent = 'connecting to shared world…';
+
+  initScene();
+  world = generateBaseTerrain();
+  rebuildAllMeshes();
+  spawnPlayer();
+  buildHotbar();
+  setupInput();
+  clock.start();
+  animate();
+
+  startSyncLoop();
+  setTimeout(()=>{ statusEl.textContent = 'synced · id '+myId.slice(2,8); }, 1200);
+
+  document.getElementById('c').requestPointerLock();
+}
+
+document.getElementById('join-btn').addEventListener('click', ()=>{
+  const v = document.getElementById('name-input').value.trim();
+  boot(v || ('Guest' + Math.floor(Math.random()*900+100)));
+});
+document.getElementById('name-input').addEventListener('keydown', e=>{
+  if(e.key === 'Enter') document.getElementById('join-btn').click();
+});
+document.getElementById('name-input').focus();
+
+})();
+</script>
+</body>
+</html>
