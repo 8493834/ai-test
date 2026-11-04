@@ -932,7 +932,7 @@ function hurt(n){
 }
 function survivalTick(now){
   if(P.ground){ if(mode==='s'&&P.peak-P.y>3.4) hurt(Math.floor(P.peak-P.y-2.4)); P.peak=P.y }
-  else if(!(P.peak>=P.y)) P.peak=P.y;
+  else if(!(P.peak>=0)) P.peak=P.y; /* fall is measured from where you left the ground, so jumping off a ledge doesn't add the jump height */
   if(mode==='s'&&hp<20&&now-lastHurt>5000&&now-lastRegen>2500){ hp++; lastRegen=now; renderVitals(); scheduleSave() }
 }
 function rayBox(ox,oy,oz,d,x0,y0,z0,x1,y1,z1){
