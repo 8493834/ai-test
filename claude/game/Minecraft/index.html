@@ -1295,6 +1295,12 @@ function initInput(){
     P.yaw-=e.movementX*.0023; P.pitch=clamp(P.pitch-e.movementY*.0023,-1.55,1.55);
   });
   window.addEventListener('keydown',function(e){
+    /* crafting screen: the craft key / Esc close it. Handled here (not in a second listener) so the
+       same keypress that opens the screen can't also close it. Ignore key-repeat. */
+    if(craftOpen){
+      if(!e.repeat&&(e.code===B.craft||e.code==='Escape')){ e.preventDefault(); closeCraft() }
+      return;
+    }
     if(!playing){ return }
     keys[e.code]=true;
     if(e.code===B.jump||e.code==='Space'||e.code.indexOf('Arrow')===0||e.code==='Tab') e.preventDefault();
@@ -1307,7 +1313,6 @@ function initInput(){
     if(e.code===B.menu&&!e.repeat){ if(document.pointerLockElement) document.exitPointerLock(); else showPanel() }
   });
   window.addEventListener('keyup',function(e){keys[e.code]=false});
-  window.addEventListener('keydown',function(e){ if(craftOpen&&(e.code===B.craft||e.code==='Escape')){ e.preventDefault(); closeCraft() } });
   $('craftx').addEventListener('click',closeCraft);
   window.addEventListener('blur',function(){keys={};held=-1});
   c.addEventListener('mousedown',function(e){
