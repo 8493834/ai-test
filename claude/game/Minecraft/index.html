@@ -823,12 +823,13 @@ var mySkin=null, myName='Player', started=false, lastPresence=0, lastSent='';
 /* modes, survival, pvp, saving */
 var mode='c', hp=20, inv={}, order=[], page=0, pvp=false, lastHurt=0, lastRegen=0;
 var craftOpen=false, brk=null, lastHitT=0, dur={};
-var save={e:{}}, saveT=null;
+var save={e:{}}, saveT=null, graves=[];
 function saveKey(){return 'blockcraft-save-'+SEED}
 function readSave(){ try{ var s=JSON.parse(localStorage.getItem(saveKey())||'null'); if(s&&typeof s==='object'&&s.e) return s }catch(e){} return {e:{}} }
 function scheduleSave(){ clearTimeout(saveT); saveT=setTimeout(writeSave,1200) }
 function writeSave(){
   clearTimeout(saveT); save.m=mode; save.inv=inv; save.hp=hp; save.o=order; save.d=dur;
+  save.g=graves.map(function(g){return {x:g.x,y:g.y,z:g.z,n:g.n,inv:g.inv,o:g.o,d:g.d}});
   if(started) save.p={x:P.x,y:P.y,z:P.z,yaw:P.yaw,pitch:P.pitch};
   try{ localStorage.setItem(saveKey(),JSON.stringify(save)); $('savemsg').textContent='World saved' }catch(e){}
 }
@@ -840,6 +841,7 @@ function loadWorld(s){
   SEEDSTR=s; SEED=seedNum(s); world.fill(0); generate(); save=readSave();
   for(var k in save.e){ var p=k.split(',').map(Number); if(validEdit(p[0],p[1],p[2],save.e[k])) world[ix(p[0],p[1],p[2])]=save.e[k] }
   inv=save.inv||{}; order=save.o||[]; dur=save.d||{}; hp=save.hp||20; if(save.m) $('gmode').value=save.m;
+  loadGraves(save.g);
   try{ localStorage.setItem('blockcraft-last-seed',s) }catch(e){}
   $('seed').value=s;
   for(var cx=0;cx<NCX;cx++) for(var cz=0;cz<NCZ;cz++) buildChunk(cx,cz);
@@ -927,7 +929,11 @@ function setMode(m){
 function hurt(n){
   if(mode!=='s'||!playing||n<=0) return;
   hp-=n; lastHurt=performance.now();
-  if(hp<=0){ hp=20; inv={}; order=[]; dur={}; toast('You died and lost your items'); respawn(); buildHotbar() }
+  if(hp<=0){
+    var gv=makeGrave();
+    hp=20; inv={}; order=[]; dur={}; respawn(); buildHotbar();
+    toast(gv?'You died. Your items are in a grave at '+gv.x+', '+gv.y+', '+gv.z+' \u2014 click it to get them back':'You died');
+  }
   renderVitals(); scheduleSave();
 }
 function survivalTick(now){
@@ -954,6 +960,62 @@ function tryHit(){
   });
   if(!best||(target&&target.t<bt)) return false;
   net.sendHit(best.gid,dmg()); lastHitT=performance.now(); if(heldTool()&&heldTool().tool===3) useTool(); toast('Hit '+best.name); return true;
+}
+
+/* graves: when you die in survival your items are left in a tombstone; click it to take them back */
+function removeGraveMesh(g){
+  if(!g.mesh) return;
+  scene.remove(g.mesh);
+  g.mesh.traverse(function(o){
+    if(o.geometry) o.geometry.dispose();
+    if(o.material){ if(o.material.map) o.material.map.dispose(); o.material.dispose() }
+  });
+  g.mesh=null;
+}
+function addGraveMesh(g){
+  var stone=new THREE.MeshLambertMaterial({color:0x9a9ca4}), dark=new THREE.MeshLambertMaterial({color:0x62646c});
+  var grp=new THREE.Group();
+  var base=new THREE.Mesh(new THREE.BoxGeometry(.8,.14,.5),dark); base.position.y=.07;
+  var slab=new THREE.Mesh(new THREE.BoxGeometry(.6,.9,.16),stone); slab.position.y=.59;
+  grp.add(base); grp.add(slab);
+  var tag=nameSprite('R.I.P. '+g.n); tag.position.y=1.5; grp.add(tag);
+  grp.position.set(g.x+.5,g.y,g.z+.5);
+  scene.add(grp); g.mesh=grp;
+}
+function loadGraves(list){
+  graves.forEach(removeGraveMesh); graves=[];
+  if(!Array.isArray(list)) return;
+  list.forEach(function(g){
+    if(!g||!isFinite(g.x)||!isFinite(g.y)||!isFinite(g.z)||!g.inv||typeof g.inv!=='object') return;
+    var n={x:g.x|0,y:g.y|0,z:g.z|0,n:typeof g.n==='string'?g.n.slice(0,16):'Player',inv:g.inv,o:Array.isArray(g.o)?g.o:[],d:g.d&&typeof g.d==='object'?g.d:{}};
+    graves.push(n); addGraveMesh(n);
+  });
+}
+function makeGrave(){
+  var has=false; for(var k in inv) if(inv[k]>0){ has=true; break }
+  if(!has) return null;
+  var x=Math.floor(P.x), z=Math.floor(P.z), y=Math.floor(P.y+.05);
+  while(y>1&&!get(x,y-1,z)) y--;
+  while(get(x,y,z)&&y<H-1) y++;
+  var g={x:x,y:y,z:z,n:myName,inv:JSON.parse(JSON.stringify(inv)),o:order.slice(),d:JSON.parse(JSON.stringify(dur))};
+  graves.push(g); addGraveMesh(g); scheduleSave();
+  return g;
+}
+function collectGrave(g){
+  for(var id in g.inv) if(g.inv[id]>0) addItem(+id,g.inv[id]);
+  for(var d in g.d) if(!dur[d]) dur[d]=g.d[d];
+  removeGraveMesh(g); graves.splice(graves.indexOf(g),1);
+  buildHotbar(); scheduleSave(); toast('You recovered your items');
+}
+function tryGrave(){
+  if(!graves.length) return false;
+  var d=lookDir(), best=null, bt=REACH;
+  graves.forEach(function(g){
+    var t=rayBox(P.x,P.y+EYE,P.z,d,g.x+.1,g.y,g.z+.1,g.x+.9,g.y+1.1,g.z+.9);
+    if(t!==null&&t<bt){ bt=t; best=g }
+  });
+  if(!best||(target&&target.t<bt)) return false;
+  collectGrave(best); return true;
 }
 function giveDrop(id){
   var d=DROPS[id]||id;
@@ -1318,6 +1380,7 @@ function initInput(){
   c.addEventListener('mousedown',function(e){
     if(!playing) return;
     if(!document.pointerLockElement){ var wasFailed=lockFailed; try{c.requestPointerLock()}catch(er){} if(!wasFailed) return }
+    if((e.button===0||e.button===2)&&tryGrave()) return;
     if(e.button===0){breakBlock();held=0;lastAct=performance.now()+180}
     else if(e.button===2){placeBlock();held=2;lastAct=performance.now()+180}
   });
